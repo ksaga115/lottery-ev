@@ -129,6 +129,19 @@ textarea { min-height: 96px; font-family: ui-monospace, Consolas, monospace; fon
 label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-width: 0; }
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.row-actions.spread { justify-content: space-between; }
+
+/* template list */
+.presets { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.presets li {
+  display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center;
+  padding: 8px 8px 8px 12px; border-radius: 10px; background: var(--surface-2); border: 1px solid transparent;
+}
+.presets li.current { border-color: var(--brass); background: var(--brass-soft); }
+.presets .pn { min-width: 0; }
+.presets .pn b { display: block; font-size: 14px; overflow-wrap: anywhere; }
+.presets .pn span { font-size: 12px; color: var(--muted); }
+.presets .empty { grid-template-columns: 1fr; color: var(--muted); font-size: 13px; }
 
 /* my turn */
 .turn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -140,6 +153,24 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
 .survive .track { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
 .survive .track i { display: block; height: 100%; background: var(--good); }
 .survive span:last-child { text-align: right; }
+
+/* distribution */
+.dist { display: grid; gap: 10px; }
+.dist-p { padding: 10px 12px; border-radius: 10px; background: var(--surface-2); display: grid; gap: 6px; }
+.dist-p .hd2 { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-weight: 700; }
+.dist-p .hd2 span { font-size: 12px; color: var(--muted); font-weight: 400; }
+.dist-p dl { margin: 0; display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; font-size: 13px; }
+.dist-p dt { color: var(--muted); }
+.dist-p dd { margin: 0; text-align: right; font-weight: 700; }
+.hist { display: flex; align-items: flex-end; gap: 2px; height: 34px; }
+.hist i { flex: 1; background: var(--line); border-radius: 2px 2px 0 0; min-height: 1px; }
+.hist i.in { background: var(--brass); }
+.hist-x { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+.ladder { display: grid; gap: 4px; }
+.ladder div { display: grid; grid-template-columns: 6.5em 1fr 4.2em; gap: 8px; align-items: center; font-size: 13px; }
+.ladder .track { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+.ladder .track i { display: block; height: 100%; background: var(--brass); }
+.ladder span:last-child { text-align: right; }
 
 /* settings editor */
 .edit-list { display: grid; gap: 10px; }
@@ -212,8 +243,9 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
     <section class="card">
       <h2>当選の記録 <span class="hint">発表されたらタップ</span></h2>
       <div class="prizes" id="liveList"></div>
-      <div class="row-actions">
+      <div class="row-actions spread">
         <button class="btn" id="undoBtn" type="button">1つ戻す</button>
+        <button class="btn danger" id="resetTop" type="button">リセット</button>
       </div>
     </section>
 
@@ -238,6 +270,11 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
         <input type="number" id="myPos" inputmode="numeric" min="1" placeholder="例: 350">
       </label>
       <div id="turnBox"></div>
+    </section>
+
+    <section class="card">
+      <h2>確率の内訳 <span class="hint">超幾何分布で計算</span></h2>
+      <div class="dist" id="distBox"></div>
     </section>
   </div>
 
@@ -269,13 +306,9 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
 
     <section class="card">
       <h2>テンプレート</h2>
-      <div class="row2">
-        <select id="presetSel" aria-label="保存済みテンプレート"></select>
-        <button class="btn" id="presetLoad" type="button">読み込む</button>
-      </div>
+      <ul class="presets" id="presetList"></ul>
       <div class="row-actions">
-        <button class="btn" id="presetSave" type="button">今の設定を保存</button>
-        <button class="btn danger" id="presetDel" type="button">選択中を削除</button>
+        <button class="btn" id="presetSave" type="button">今の設定をテンプレートに保存</button>
       </div>
       <p class="note">テンプレートを読み込むと当選の記録はリセットされます。保存先はこの端末のブラウザです。</p>
     </section>
@@ -363,7 +396,17 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
     try { localStorage.setItem(key, JSON.stringify(v)); } catch {}
   }
 
-  let state = load(STORE_KEY, null) || { config: clone(SAMPLE), drawn: {}, log: [], undo: [], myPos: null };
+  // Results are kept as an action list; counts and the log are replayed from it,
+  // so undo / − simply remove an action and leave no trace in the log.
+  let state = load(STORE_KEY, null) || { config: clone(SAMPLE), actions: [], myPos: null };
+  if (!Array.isArray(state.actions)) {
+    const old = state.drawn || {}, t = Date.now();
+    state.actions = [];
+    state.config.prizes.forEach(p => { if (!p.rest) for (let i = 0; i < (old[p.id] || 0); i++) state.actions.push({ t, k: 'hit', id: p.id }); });
+    const n = Object.values(old).reduce((s, v) => s + v, 0);
+    if (n) state.actions.push({ t, k: 'total', n });
+    delete state.drawn; delete state.log; delete state.undo;
+  }
   let presets = load(PRESET_KEY, null) || [{ name: SAMPLE.name, config: clone(SAMPLE) }];
 
   // ---------- model ----------
@@ -379,10 +422,41 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
     return { list, fixed, over: fixed > (+c.total || 0) };
   }
 
+  function poolStats(list, drawn) {
+    let R = 0, sum = 0, n = 0;
+    list.forEach(p => { const d = Math.min(drawn[p.id] || 0, p.count); R += p.count - d; sum += (p.count - d) * p.amount; n += d; });
+    return { R, n, ev: R > 0 ? sum / R : 0 };
+  }
+
+  let replayCache = null;
+  function replay() {
+    if (replayCache) return replayCache;
+    const { list } = effective();
+    const byId = Object.fromEntries(list.map(p => [p.id, p]));
+    const rest = list.find(p => p.rest);
+    const drawn = {}, entries = [];
+    state.actions.forEach(a => {
+      let text;
+      if (a.k === 'hit') {
+        const p = byId[a.id]; if (!p) return;
+        if ((drawn[p.id] || 0) < p.count) drawn[p.id] = (drawn[p.id] || 0) + 1;
+        text = `${p.name}（${yen(p.amount)}）が出た`;
+      } else if (a.k === 'total') {
+        if (!rest) return;
+        const others = list.reduce((s, p) => s + (p.id === rest.id ? 0 : (drawn[p.id] || 0)), 0);
+        drawn[rest.id] = Math.max(0, Math.min(rest.count, a.n - others));
+        text = `引き終わり ${a.n} 人に更新`;
+      } else return;
+      entries.push({ t: a.t, text, ...poolStats(list, drawn) });
+    });
+    return (replayCache = { drawn, entries });
+  }
+
   function compute() {
     const { list, over } = effective();
+    const drawn = replay().drawn;
     const rows = list.map(p => {
-      const d = Math.min(state.drawn[p.id] || 0, p.count);
+      const d = Math.min(drawn[p.id] || 0, p.count);
       return { ...p, drawn: d, rem: p.count - d };
     });
     const R = rows.reduce((s, r) => s + r.rem, 0);
@@ -400,16 +474,7 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
 
   function persist() { save(STORE_KEY, state); }
 
-  function pushUndo() {
-    state.undo.push(JSON.stringify(state.drawn));
-    if (state.undo.length > 300) state.undo.shift();
-  }
-
-  function addLog(text) {
-    const m = compute();
-    state.log.push({ t: Date.now(), text, ev: m.ev, R: m.R, n: m.drawnTotal });
-    if (state.log.length > 2000) state.log.shift();
-  }
+  function act(a) { state.actions.push({ t: Date.now(), ...a }); }
 
   function restRow(m) { return m.rows.find(r => r.rest); }
 
@@ -423,9 +488,10 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
     if (restD < 0) return showWarn(`記録済みの当たりが ${others} 本あるので、人数は ${others} 人以上にしてください。`);
     if (restD > rr.count) return showWarn(`${rr.name} は全部で ${rr.count} 本なので、人数は最大 ${others + rr.count} 人です。`);
     if (restD === rr.drawn) return showWarn('');
-    pushUndo();
-    state.drawn[rr.id] = restD;
-    addLog(`引き終わり ${n} 人に更新`);
+    // consecutive count updates collapse into one entry
+    const last = state.actions[state.actions.length - 1];
+    if (last && last.k === 'total') state.actions.pop();
+    act({ k: 'total', n });
     showWarn('');
     commit();
   }
@@ -434,21 +500,34 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
     const m = compute();
     const r = m.rows.find(x => x.id === id);
     if (!r) return;
-    const next = r.drawn + delta;
-    if (next < 0 || next > r.count) return;
-    pushUndo();
-    state.drawn[id] = next;
-    addLog(delta > 0 ? `${r.name}（${yen(r.amount)}）が出た` : `${r.name} を1本取り消し`);
-    commit();
-    if (delta > 0) toast(`${r.name} を記録しました`);
+    if (delta > 0) {
+      if (r.rem <= 0) return;
+      act({ k: 'hit', id });
+      commit();
+      toast(`${r.name} を記録しました`);
+    } else {
+      // remove the most recent record of this prize
+      let i = state.actions.length - 1;
+      while (i >= 0 && !(state.actions[i].k === 'hit' && state.actions[i].id === id)) i--;
+      if (i < 0) return toast(`${r.name} は人数入力から数えた分なので、人数を直してください`);
+      state.actions.splice(i, 1);
+      commit();
+      toast(`${r.name} の記録を1つ消しました`);
+    }
   }
 
   function undo() {
-    if (!state.undo.length) return;
-    state.drawn = JSON.parse(state.undo.pop());
-    addLog('1つ戻した');
+    if (!state.actions.length) return;
+    state.actions.pop();
     commit();
-    toast('1つ戻しました');
+    toast('直前の記録を取り消しました');
+  }
+
+  function resetResults() {
+    state.actions = [];
+    commit();
+    if (!$('pSet').hidden) renderSettings();
+    toast('当選の記録をリセットしました');
   }
 
   // ---------- probability helpers ----------
@@ -481,6 +560,33 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
     out.sort();
     return out;
   }
+  // log-factorial table for hypergeometric pmf
+  let lnF = new Float64Array([0]);
+  function lnFact(n) {
+    if (n >= lnF.length) {
+      const t = new Float64Array(n + 1); t.set(lnF);
+      for (let i = lnF.length; i <= n; i++) t[i] = t[i - 1] + Math.log(i);
+      lnF = t;
+    }
+    return lnF[n];
+  }
+  const lnC = (n, k) => (k < 0 || k > n) ? -Infinity : lnFact(n) - lnFact(k) - lnFact(n - k);
+  // X = number of the k special tickets among m draws from R
+  function hyperPmf(R, k, m) {
+    const lo = Math.max(0, m - (R - k)), hi = Math.min(k, m), den = lnC(R, m), out = [];
+    for (let x = lo; x <= hi; x++) out.push({ x, p: Math.exp(lnC(k, x) + lnC(R - k, m - x) - den) });
+    return out;
+  }
+  function pmfQuantile(pmf, p) {
+    let c = 0; for (const e of pmf) { c += e.p; if (c >= p - 1e-12) return e.x; } return pmf[pmf.length - 1].x;
+  }
+  // smallest x with P(at least one of k appears within next x draws) >= p
+  function waitQuantile(R, k, p) {
+    let none = 1;
+    for (let x = 1; x <= R; x++) { none *= (R - k - x + 1) / (R - x + 1); if (1 - none >= p) return x; }
+    return R;
+  }
+
   const q = (arr, p) => arr[Math.min(arr.length - 1, Math.floor(p * arr.length))];
 
   // ---------- render ----------
@@ -511,6 +617,7 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
 
     renderLive(m);
     renderTurn(m);
+    renderDist(m);
     renderSpark();
     if (!$('pLog').hidden) renderLog();
   }
@@ -546,7 +653,7 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
     $('restNote').textContent = rr
       ? `人数を変えると、記録した当たり以外は「${rr.name}」を引いたものとして数えます。`
       : '「残り全部」の賞がないので人数入力は使えません。';
-    $('undoBtn').disabled = !state.undo.length;
+    $('undoBtn').disabled = !state.actions.length;
   }
 
   let simTimer = null;
@@ -583,16 +690,68 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
     }, 60);
   }
 
+  function renderDist(m) {
+    const box = $('distBox');
+    if (!m.R) { box.innerHTML = '<p class="note">すべて引き終わりました。</p>'; return; }
+    const pos = +state.myPos || 0;
+    const ahead = pos ? pos - 1 - m.drawnTotal : -1;
+    const hasAhead = ahead > 0 && ahead < m.R;
+    const live = m.rows.filter(r => r.rem > 0);
+
+    // payout distribution of my single draw
+    const amts = [...new Set(live.map(r => r.amount))].sort((a, b) => b - a);
+    const ge = a => live.filter(r => r.amount >= a).reduce((s, r) => s + r.rem, 0) / m.R;
+    const varr = live.reduce((s, r) => s + r.rem / m.R * (r.amount - m.ev) ** 2, 0);
+    const ladder = amts.map(a => {
+      const p = ge(a);
+      return `<div><span class="num">${yen(a)} 以上</span><span class="track"><i style="width:${Math.max(p * 100, p > 0 ? 1 : 0)}%"></i></span><span class="num">${pct(p, p < 0.1 ? 2 : 1)}</span></div>`;
+    }).join('');
+    const odds = p => p > 0 ? `約 1/${Math.round(1 / p).toLocaleString()}` : '—';
+
+    const cards = m.rows.filter(r => !r.rest && r.rem > 0).map(r => {
+      const p = r.rem / m.R;
+      const meanWait = (m.R + 1) / (r.rem + 1);
+      const half = waitQuantile(m.R, r.rem, 0.5);
+      let before = '';
+      if (hasAhead) {
+        const pmf = hyperPmf(m.R, r.rem, ahead);
+        const lo = pmfQuantile(pmf, 0.1), hi = pmfQuantile(pmf, 0.9);
+        const shown = pmf.filter(e => e.x <= Math.max(hi + 2, 3)).slice(0, 30);
+        const mx = Math.max(...shown.map(e => e.p));
+        before = `
+          <dt>自分の番までに出る本数</dt><dd class="num">平均 ${(ahead * r.rem / m.R).toFixed(1)} 本</dd>
+          <dt>80%の範囲</dt><dd class="num">${lo === hi ? `${lo} 本` : `${lo}〜${hi} 本`}</dd>
+          <dt>1本も出ない確率</dt><dd class="num">${pct(pmf[0].x === 0 ? pmf[0].p : 0, 1)}</dd>
+          </dl>
+          <div class="hist" aria-hidden="true">${shown.map(e => `<i class="${e.x >= lo && e.x <= hi ? 'in' : ''}" style="height:${(e.p / mx * 100).toFixed(1)}%"></i>`).join('')}</div>
+          <div class="hist-x num"><span>${shown[0].x}本</span><span>自分の番までに出る本数の分布</span><span>${shown[shown.length - 1].x}本</span></div>`;
+      }
+      return `<div class="dist-p">
+        <div class="hd2">${esc(r.name)} ${yen(r.amount)}<span class="num">残り ${r.rem} 本</span></div>
+        <dl>
+          <dt>自分が当てる確率</dt><dd class="num">${pct(p, p < 0.01 ? 3 : 2)}（${odds(p)}）</dd>
+          <dt>次に出るまで</dt><dd class="num">平均 あと ${Math.round(meanWait).toLocaleString()} 人</dd>
+          <dt>50%の確率で出る人数</dt><dd class="num">あと ${half.toLocaleString()} 人以内</dd>
+          ${before || '</dl>'}
+      </div>`;
+    }).join('');
+
+    box.innerHTML = `
+      <div class="dist-p">
+        <div class="hd2">自分の1回で出る金額<span class="num">ばらつき ±${yen(Math.sqrt(varr))}</span></div>
+        <div class="ladder">${ladder}</div>
+        ${m.cost > 0 ? `<div class="note num">参加費 ${yen(m.cost)} を下回る確率 ${pct(1 - m.pProfit, 1)}</div>` : ''}
+      </div>
+      ${cards || '<p class="note">上位賞はすべて出ました。</p>'}
+      ${pos && !hasAhead ? '' : (!pos ? '<p class="note">「自分の番」に順番を入れると、自分の番までに各賞が何本出そうかも出ます。</p>' : '')}
+    `;
+  }
+
   function series() {
-    const pts = [];
-    const first = state.log.length ? null : compute();
-    // starting point = full pool EV
-    const { list } = effective();
-    const T = list.reduce((s, r) => s + r.count, 0);
-    const ev0 = T ? list.reduce((s, r) => s + r.count * r.amount, 0) / T : 0;
-    pts.push({ n: 0, ev: ev0 });
-    state.log.forEach(l => pts.push({ n: l.n, ev: l.ev }));
-    if (first) pts.push({ n: first.drawnTotal, ev: first.ev });
+    // starting point = full pool EV, then one point per record
+    const pts = [{ n: 0, ev: poolStats(effective().list, {}).ev }];
+    replay().entries.forEach(l => pts.push({ n: l.n, ev: l.ev }));
+    if (pts.length === 1) pts.push(pts[0]);
     return pts;
   }
 
@@ -642,9 +801,10 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
       <text x="${pad.l}" y="136" font-size="10" fill="var(--muted)">開始</text>
       <text x="310" y="136" text-anchor="end" font-size="10" fill="var(--muted)">記録 ${pts.length - 1} 件</text>`;
 
-    $('logCount').textContent = `${state.log.length} 件`;
-    $('logList').innerHTML = state.log.length
-      ? state.log.slice().reverse().slice(0, 300).map(l => {
+    const entries = replay().entries;
+    $('logCount').textContent = `${entries.length} 件`;
+    $('logList').innerHTML = entries.length
+      ? entries.slice().reverse().slice(0, 300).map(l => {
           const t = new Date(l.t);
           const hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
           return `<li><time class="num">${hm}</time><span>${esc(l.text)}<br><span class="note num">残り ${l.R} 本</span></span><span class="e num">${yen(l.ev)}</span></li>`;
@@ -672,7 +832,7 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
           : `<label class="f">本数<input type="number" inputmode="numeric" data-f="count" min="0" value="${p.count}"></label>`}
         <div class="opts">
           <label><input type="radio" name="restPick" data-rest="${i}" ${p.rest ? 'checked' : ''}> 残り全部（ハズレ・最下位賞）</label>
-          ${state.drawn[p.id] ? `<span class="note">記録 ${state.drawn[p.id]} 本</span>` : ''}
+          ${replay().drawn[p.id] ? `<span class="note">記録 ${replay().drawn[p.id]} 本</span>` : ''}
         </div>
       </div>`;
     }).join('');
@@ -682,7 +842,18 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
     else if (!hasRest && (+c.total - fixed) > 0) { w.hidden = false; w.textContent = `残りの ${+c.total - fixed} 本は ¥0 のハズレとして計算します。`; }
     else w.hidden = true;
 
-    $('presetSel').innerHTML = presets.map((p, i) => `<option value="${i}">${esc(p.name)}</option>`).join('');
+    $('presetList').innerHTML = presets.length
+      ? presets.map((p, i) => {
+          const pz = p.config.prizes || [];
+          const top = pz.filter(x => !x.rest).sort((a, b) => b.amount - a.amount)[0];
+          const sub = `${(+p.config.total).toLocaleString()}本・参加費 ${yen(+p.config.cost || 0)}${top ? `・最高 ${yen(top.amount)}` : ''}`;
+          return `<li class="${p.name === state.config.name ? 'current' : ''}">
+            <div class="pn"><b>${esc(p.name)}</b><span class="num">${sub}</span></div>
+            <button class="btn small" type="button" data-pload="${i}">読み込む</button>
+            <button class="btn small danger" type="button" data-pdel="${i}" aria-label="${esc(p.name)}を削除">削除</button>
+          </li>`;
+        }).join('')
+      : '<li class="empty">保存したテンプレートはありません。</li>';
     $('jsonBox').value = JSON.stringify(exportConfig(), null, 1);
   }
 
@@ -707,12 +878,12 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
 
   function replaceConfig(cfg, label) {
     state.config = cfg;
-    state.drawn = {}; state.undo = []; state.log = [];
+    state.actions = [];
     commit(); renderSettings();
     toast(label);
   }
 
-  function commit() { persist(); render(); }
+  function commit() { replayCache = null; persist(); render(); }
 
   // ---------- UI glue ----------
   let toastTimer;
@@ -745,6 +916,7 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
     hit(b.dataset.hit, +b.dataset.d);
   });
   $('undoBtn').addEventListener('click', undo);
+  $('resetTop').addEventListener('click', e => armed(e.currentTarget, resetResults, 'もう一度タップで全消去'));
 
   document.querySelectorAll('[data-step]').forEach(b => b.addEventListener('click', () => {
     setDrawnTotal(compute().drawnTotal + +b.dataset.step);
@@ -765,7 +937,7 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
   $('myPos').addEventListener('input', e => {
     const v = Math.floor(+e.target.value);
     state.myPos = v > 0 ? v : null;
-    persist(); renderTurn(compute());
+    persist(); const mm = compute(); renderTurn(mm); renderDist(mm);
   });
 
   // settings handlers
@@ -790,7 +962,7 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
     const b = e.target.closest('[data-del]'); if (!b) return;
     armed(b, () => {
       const p = state.config.prizes.splice(+b.dataset.del, 1)[0];
-      delete state.drawn[p.id];
+      state.actions = state.actions.filter(a => a.id !== p.id);
       commit(); renderSettings(); toast(`${p.name} を削除しました`);
     }, '本当に削除');
   });
@@ -815,9 +987,17 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
     $('jsonBox').value = JSON.stringify(exportConfig(), null, 1);
   }
 
-  $('presetLoad').addEventListener('click', e => {
-    const p = presets[+$('presetSel').value]; if (!p) return;
-    armed(e.currentTarget, () => replaceConfig(importConfig(p.config), `「${p.name}」を読み込みました`), '記録を消して読み込む');
+  $('presetList').addEventListener('click', e => {
+    const lb = e.target.closest('[data-pload]'), db = e.target.closest('[data-pdel]');
+    if (lb) {
+      const p = presets[+lb.dataset.pload]; if (!p) return;
+      armed(lb, () => replaceConfig(importConfig(p.config), `「${p.name}」を読み込みました`), '記録を消して読込');
+    } else if (db) {
+      const i = +db.dataset.pdel; if (!presets[i]) return;
+      armed(db, () => {
+        const [p] = presets.splice(i, 1); save(PRESET_KEY, presets); renderSettings(); toast(`「${p.name}」を削除しました`);
+      }, '本当に削除');
+    }
   });
   $('presetSave').addEventListener('click', () => {
     const name = state.config.name || '抽選会';
@@ -825,14 +1005,7 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
     const entry = { name, config: exportConfig() };
     if (i >= 0) presets[i] = entry; else presets.push(entry);
     save(PRESET_KEY, presets); renderSettings();
-    $('presetSel').value = String(i >= 0 ? i : presets.length - 1);
-    toast(`「${name}」として保存しました`);
-  });
-  $('presetDel').addEventListener('click', e => {
-    const i = +$('presetSel').value; if (!presets[i]) return;
-    armed(e.currentTarget, () => {
-      const [p] = presets.splice(i, 1); save(PRESET_KEY, presets); renderSettings(); toast(`「${p.name}」を削除しました`);
-    }, '本当に削除');
+    toast(i >= 0 ? `「${name}」を上書き保存しました` : `「${name}」として保存しました`);
   });
   $('jsonCopy').addEventListener('click', () => {
     const box = $('jsonBox'); box.value = JSON.stringify(exportConfig(), null, 1);
@@ -846,7 +1019,7 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
     armed(e.currentTarget, () => replaceConfig(cfg, '設定を取り込みました'), '記録を消して取り込む');
   });
   $('resetBtn').addEventListener('click', e => {
-    armed(e.currentTarget, () => { state.drawn = {}; state.undo = []; state.log = []; commit(); renderSettings(); toast('当選の記録をリセットしました'); }, 'もう一度タップでリセット');
+    armed(e.currentTarget, resetResults, 'もう一度タップでリセット');
   });
 
   render();
