@@ -1,0 +1,856 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>抽選会 期待値ナビ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap">
+<style>
+/* Layout: sticky EV header (the one number that matters) + one scrolling panel + fixed bottom tab bar. Mobile first. */
+:root {
+  --bg: #eceef4;
+  --surface: #ffffff;
+  --surface-2: #f5f6fa;
+  --ink: #1b1f3a;
+  --muted: #5d6380;
+  --line: #d5d9e6;
+  --brass: #c4911f;
+  --brass-ink: #7a5600;
+  --brass-soft: #f6ecd2;
+  --good: #1f7a4d;
+  --good-soft: #dff2e8;
+  --bad: #b3261e;
+  --bad-soft: #fbe3e1;
+  --f-display: "Dela Gothic One", "Hiragino Sans", "Yu Gothic", sans-serif;
+  --f-body: "Zen Kaku Gothic New", "Hiragino Sans", "Yu Gothic", "Meiryo", sans-serif;
+  --r: 12px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #10121f; --surface: #191c2e; --surface-2: #20243a; --ink: #e8eaf6; --muted: #9aa0bf; --line: #2e3352;
+    --brass: #d9a53a; --brass-ink: #f0c25e; --brass-soft: #3a2f14;
+    --good: #4cc38a; --good-soft: #163527; --bad: #ff7a6e; --bad-soft: #3d1a18;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #10121f; --surface: #191c2e; --surface-2: #20243a; --ink: #e8eaf6; --muted: #9aa0bf; --line: #2e3352;
+  --brass: #d9a53a; --brass-ink: #f0c25e; --brass-soft: #3a2f14;
+  --good: #4cc38a; --good-soft: #163527; --bad: #ff7a6e; --bad-soft: #3d1a18;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--f-body); font-size: 15px; line-height: 1.55;
+  -webkit-tap-highlight-color: transparent;
+  padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+}
+.num { font-variant-numeric: tabular-nums; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
+.wrap { max-width: 560px; margin: 0 auto; padding-inline: 16px; }
+
+/* ---- header ---- */
+.hd {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 10;
+  background: var(--bg);
+  padding-block: 12px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.hd-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.ev-name { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.chip { font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 999px; white-space: nowrap; }
+.chip.good { background: var(--good-soft); color: var(--good); }
+.chip.bad { background: var(--bad-soft); color: var(--bad); }
+.chip.end { background: var(--surface-2); color: var(--muted); }
+.ev-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: end; margin-top: 4px; }
+.ev-label { font-size: 11px; letter-spacing: .08em; color: var(--muted); }
+.ev-big { font-family: var(--f-display); font-size: clamp(38px, 12vw, 52px); line-height: 1.05; letter-spacing: .01em; }
+.ev-big small { font-size: .45em; margin-right: 2px; }
+.ev-sub { font-size: 13px; color: var(--muted); }
+.ev-sub b { color: var(--ink); }
+.spark { width: 120px; height: 46px; display: block; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+.stat { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; min-width: 0; }
+.stat .k { font-size: 11px; color: var(--muted); }
+.stat .v { font-weight: 700; font-size: 16px; }
+
+/* ---- panels ---- */
+main { padding-block: 14px 24px; display: grid; gap: 16px; }
+section.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 14px; display: grid; gap: 12px; }
+h2 { margin: 0; font-size: 14px; letter-spacing: .06em; font-weight: 700; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; text-wrap: balance; }
+h2 .hint { font-weight: 400; font-size: 12px; color: var(--muted); letter-spacing: 0; }
+.note { font-size: 12px; color: var(--muted); margin: 0; }
+.warn { font-size: 13px; color: var(--bad); background: var(--bad-soft); padding: 8px 10px; border-radius: 8px; margin: 0; }
+
+/* prize rows (live) */
+.prizes { display: grid; gap: 8px; }
+.prize {
+  display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center;
+  padding: 10px 10px 10px 12px; border-radius: 10px; background: var(--surface-2);
+  border: 1px solid transparent;
+}
+.prize.top { border-color: var(--brass); background: var(--brass-soft); }
+.prize.out { opacity: .5; }
+.prize.out .p-name { text-decoration: line-through; }
+.p-main { min-width: 0; }
+.p-name { font-weight: 700; display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.p-amt { font-family: var(--f-display); font-weight: 400; font-size: 15px; color: var(--brass-ink); }
+.p-meta { font-size: 12px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; }
+.p-meta b { color: var(--ink); font-weight: 700; }
+.bar { grid-column: 1 / -1; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--brass); }
+.p-btns { display: flex; gap: 6px; }
+.btn {
+  border: 1px solid var(--line); background: var(--surface); border-radius: 10px;
+  min-height: 44px; padding: 0 12px; font-weight: 700;
+}
+.btn:active { transform: translateY(1px); }
+.btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.btn.hit { background: var(--brass); color: #1b1300; border-color: var(--brass); min-width: 64px; }
+.btn.small { min-height: 36px; padding: 0 10px; font-size: 13px; }
+.btn.danger { color: var(--bad); border-color: var(--bad); background: transparent; }
+.btn.danger.armed { background: var(--bad); color: var(--surface); }
+.btn:disabled { opacity: .35; cursor: default; }
+
+.stepper { display: grid; grid-template-columns: auto 1fr auto auto; gap: 6px; align-items: center; }
+.stepper input { min-width: 0; width: 100%; text-align: center; font-size: 20px; font-weight: 700; }
+input[type="number"], input[type="text"], select, textarea {
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px;
+  padding: 8px 10px; min-height: 44px; width: 100%; min-width: 0;
+}
+textarea { min-height: 96px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-width: 0; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* my turn */
+.turn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mini { background: var(--surface-2); border-radius: 10px; padding: 8px 10px; min-width: 0; }
+.mini .k { font-size: 11px; color: var(--muted); }
+.mini .v { font-weight: 700; font-size: 17px; }
+.survive { display: grid; gap: 6px; }
+.survive div { display: grid; grid-template-columns: 5.5em 1fr 3.6em; gap: 8px; align-items: center; font-size: 13px; }
+.survive .track { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+.survive .track i { display: block; height: 100%; background: var(--good); }
+.survive span:last-child { text-align: right; }
+
+/* settings editor */
+.edit-list { display: grid; gap: 10px; }
+.edit {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+  padding: 10px; border-radius: 10px; background: var(--surface-2);
+}
+.edit .name { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.edit .opts { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; }
+.edit .opts label { display: flex; gap: 6px; align-items: center; }
+.edit input[type="number"], .edit input[type="text"] { background: var(--surface); }
+.rest-count { font-size: 13px; color: var(--muted); align-self: end; padding-bottom: 10px; }
+
+/* log */
+.log { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.log li { display: grid; grid-template-columns: 3.4em 1fr auto; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.log li:last-child { border-bottom: 0; }
+.log time { color: var(--muted); }
+.log .e { font-weight: 700; }
+
+/* tab bar */
+.tabs {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+  background: var(--surface); border-top: 1px solid var(--line);
+  padding: 6px 16px calc(6px + env(safe-area-inset-bottom, 0px));
+}
+.tabs .in { max-width: 560px; margin: 0 auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.tab { border: 0; background: transparent; min-height: 52px; border-radius: 10px; font-weight: 700; font-size: 13px; color: var(--muted); display: grid; place-items: center; gap: 0; }
+.tab svg { width: 22px; height: 22px; }
+.tab[aria-selected="true"] { color: var(--ink); background: var(--surface-2); }
+.toast {
+  position: fixed; left: 50%; bottom: calc(84px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%);
+  background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 999px; font-size: 13px; z-index: 30;
+  max-width: calc(100% - 32px);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ev-big { transition: color .3s; }
+  .flash { animation: flash .6s ease-out; }
+  @keyframes flash { from { color: var(--brass); } to { color: var(--ink); } }
+}
+</style>
+</head>
+<body>
+
+<header class="hd">
+  <div class="wrap">
+    <div class="hd-top">
+      <div class="ev-name" id="evName"></div>
+      <span class="chip" id="evChip"></span>
+    </div>
+    <div class="ev-row">
+      <div>
+        <div class="ev-label">次の1本の期待値</div>
+        <div class="ev-big num" id="evBig"></div>
+        <div class="ev-sub num" id="evSub"></div>
+      </div>
+      <svg class="spark" id="spark" viewBox="0 0 120 46" aria-label="期待値の推移"></svg>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="k">残り本数</div><div class="v num" id="stRemain"></div></div>
+      <div class="stat"><div class="k">参加費以上</div><div class="v num" id="stProfit"></div></div>
+      <div class="stat"><div class="k">上位賞の確率</div><div class="v num" id="stTop"></div></div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <!-- LIVE -->
+  <div id="pLive" class="panel" style="display:grid;gap:16px">
+    <section class="card">
+      <h2>当選の記録 <span class="hint">発表されたらタップ</span></h2>
+      <div class="prizes" id="liveList"></div>
+      <div class="row-actions">
+        <button class="btn" id="undoBtn" type="button">1つ戻す</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>引き終わった人数 <span class="hint">「残り◯本」の発表でも可</span></h2>
+      <div class="stepper">
+        <button class="btn" type="button" data-step="-1">−1</button>
+        <input type="number" id="drawnInput" inputmode="numeric" min="0" aria-label="引き終わった人数">
+        <button class="btn" type="button" data-step="1">+1</button>
+        <button class="btn" type="button" data-step="10">+10</button>
+      </div>
+      <label class="f">残り本数で入力する
+        <input type="number" id="remainInput" inputmode="numeric" min="0" placeholder="例: 820">
+      </label>
+      <p class="note" id="restNote"></p>
+      <p class="warn" id="drawnWarn" hidden></p>
+    </section>
+
+    <section class="card">
+      <h2>自分の番 <span class="hint">整理券の順番から計算</span></h2>
+      <label class="f">自分は何番目に引く？
+        <input type="number" id="myPos" inputmode="numeric" min="1" placeholder="例: 350">
+      </label>
+      <div id="turnBox"></div>
+    </section>
+  </div>
+
+  <!-- SETTINGS -->
+  <div id="pSet" class="panel" hidden style="gap:16px">
+    <section class="card">
+      <h2>抽選会の設定</h2>
+      <label class="f">抽選会の名前
+        <input type="text" id="cfgName">
+      </label>
+      <div class="row2">
+        <label class="f">総本数
+          <input type="number" id="cfgTotal" inputmode="numeric" min="1">
+        </label>
+        <label class="f">参加費（1回）
+          <input type="number" id="cfgCost" inputmode="numeric" min="0">
+        </label>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>賞の一覧 <span class="hint">「残り全部」は総本数の残りを自動で割り当て</span></h2>
+      <div class="edit-list" id="editList"></div>
+      <div class="row-actions">
+        <button class="btn" id="addPrize" type="button">賞を追加</button>
+      </div>
+      <p class="warn" id="cfgWarn" hidden></p>
+    </section>
+
+    <section class="card">
+      <h2>テンプレート</h2>
+      <div class="row2">
+        <select id="presetSel" aria-label="保存済みテンプレート"></select>
+        <button class="btn" id="presetLoad" type="button">読み込む</button>
+      </div>
+      <div class="row-actions">
+        <button class="btn" id="presetSave" type="button">今の設定を保存</button>
+        <button class="btn danger" id="presetDel" type="button">選択中を削除</button>
+      </div>
+      <p class="note">テンプレートを読み込むと当選の記録はリセットされます。保存先はこの端末のブラウザです。</p>
+    </section>
+
+    <section class="card">
+      <h2>設定の書き出し・取り込み</h2>
+      <textarea id="jsonBox" aria-label="設定のJSON" spellcheck="false"></textarea>
+      <div class="row-actions">
+        <button class="btn" id="jsonCopy" type="button">今の設定をコピー</button>
+        <button class="btn" id="jsonLoad" type="button">貼り付けた設定を取り込む</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>リセット</h2>
+      <p class="note">当選の記録と人数だけを消します。賞の設定は残ります（2日目の開始時などに）。</p>
+      <div class="row-actions">
+        <button class="btn danger" id="resetBtn" type="button">当選の記録をリセット</button>
+      </div>
+    </section>
+  </div>
+
+  <!-- LOG -->
+  <div id="pLog" class="panel" hidden style="gap:16px">
+    <section class="card">
+      <h2>期待値の推移</h2>
+      <svg id="bigChart" viewBox="0 0 320 140" style="width:100%;height:auto;display:block" aria-label="期待値の推移グラフ"></svg>
+    </section>
+    <section class="card">
+      <h2>記録 <span class="hint" id="logCount"></span></h2>
+      <ul class="log" id="logList"></ul>
+    </section>
+    <section class="card">
+      <h2>計算のしかた</h2>
+      <p class="note">期待値 = Σ(残りの本数 × 金額) ÷ 残りの総本数。誰が何を引いたかが分かるたびに残り本数を減らして計算し直します。</p>
+      <p class="note">自分の番までに何が出るかは分からないので、「今の時点で見た自分の期待値」は今の期待値と同じになります。自分の番の欄では、その間に何が出るかを1,000回シミュレーションして、期待値がどの範囲に動きそうかを出しています。</p>
+    </section>
+  </div>
+</main>
+
+<nav class="tabs" aria-label="画面切り替え">
+  <div class="in" role="tablist">
+    <button class="tab" role="tab" data-tab="pLive" aria-selected="true" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"></circle><circle cx="12" cy="12" r="3" fill="currentColor"></circle></svg>ライブ
+    </button>
+    <button class="tab" role="tab" data-tab="pSet" aria-selected="false" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"></path></svg>設定
+    </button>
+    <button class="tab" role="tab" data-tab="pLog" aria-selected="false" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19l5-6 4 3 7-9"></path></svg>記録
+    </button>
+  </div>
+</nav>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+(() => {
+  const STORE_KEY = 'lotteryEV.state.v1';
+  const PRESET_KEY = 'lotteryEV.presets.v1';
+
+  const SAMPLE = {
+    name: '1,111本引き（岡崎・1日分）',
+    total: 1111,
+    cost: 5000,
+    prizes: [
+      { id: 'p1', name: '特賞', amount: 100000, count: 1, rest: false },
+      { id: 'p2', name: '1等', amount: 50000, count: 2, rest: false },
+      { id: 'p3', name: '2等', amount: 20000, count: 12, rest: false },
+      { id: 'p4', name: '3等', amount: 10000, count: 40, rest: false },
+      { id: 'p5', name: '4等', amount: 6000, count: 0, rest: true },
+    ],
+  };
+
+  const clone = o => JSON.parse(JSON.stringify(o));
+  const uid = () => 'p' + Math.random().toString(36).slice(2, 9);
+  const yen = n => '¥' + Math.round(n).toLocaleString('ja-JP');
+  const pct = (p, d = 1) => (p * 100).toFixed(d) + '%';
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  function load(key, fallback) {
+    try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; }
+  }
+  function save(key, v) {
+    try { localStorage.setItem(key, JSON.stringify(v)); } catch {}
+  }
+
+  let state = load(STORE_KEY, null) || { config: clone(SAMPLE), drawn: {}, log: [], undo: [], myPos: null };
+  let presets = load(PRESET_KEY, null) || [{ name: SAMPLE.name, config: clone(SAMPLE) }];
+
+  // ---------- model ----------
+  // Effective prizes: the "rest" prize absorbs total - fixed counts. With no rest prize, a virtual ハズレ (¥0) does.
+  function effective() {
+    const c = state.config;
+    const fixed = c.prizes.filter(p => !p.rest).reduce((s, p) => s + (+p.count || 0), 0);
+    const restN = Math.max(0, (+c.total || 0) - fixed);
+    const list = c.prizes.map(p => ({ ...p, amount: +p.amount || 0, count: p.rest ? restN : (+p.count || 0) }));
+    if (!c.prizes.some(p => p.rest) && restN > 0) {
+      list.push({ id: '_blank', name: 'ハズレ', amount: 0, count: restN, rest: true, virtual: true });
+    }
+    return { list, fixed, over: fixed > (+c.total || 0) };
+  }
+
+  function compute() {
+    const { list, over } = effective();
+    const rows = list.map(p => {
+      const d = Math.min(state.drawn[p.id] || 0, p.count);
+      return { ...p, drawn: d, rem: p.count - d };
+    });
+    const R = rows.reduce((s, r) => s + r.rem, 0);
+    const drawnTotal = rows.reduce((s, r) => s + r.drawn, 0);
+    const sum = rows.reduce((s, r) => s + r.rem * r.amount, 0);
+    const ev = R > 0 ? sum / R : 0;
+    const cost = +state.config.cost || 0;
+    const pProfit = R > 0 ? rows.filter(r => r.amount >= cost && r.amount > 0).reduce((s, r) => s + r.rem, 0) / R : 0;
+    // "上位賞" = prizes above the rest prize's amount (or above the lowest amount)
+    const restAmt = rows.find(r => r.rest)?.amount ?? Math.min(...rows.map(r => r.amount));
+    const topRows = rows.filter(r => !r.rest && r.amount > restAmt);
+    const pTop = R > 0 ? topRows.reduce((s, r) => s + r.rem, 0) / R : 0;
+    return { rows, R, drawnTotal, ev, cost, pProfit, pTop, topRows, over };
+  }
+
+  function persist() { save(STORE_KEY, state); }
+
+  function pushUndo() {
+    state.undo.push(JSON.stringify(state.drawn));
+    if (state.undo.length > 300) state.undo.shift();
+  }
+
+  function addLog(text) {
+    const m = compute();
+    state.log.push({ t: Date.now(), text, ev: m.ev, R: m.R, n: m.drawnTotal });
+    if (state.log.length > 2000) state.log.shift();
+  }
+
+  function restRow(m) { return m.rows.find(r => r.rest); }
+
+  // Set total drawn count: the difference goes to the rest prize.
+  function setDrawnTotal(n) {
+    const m = compute();
+    const rr = restRow(m);
+    if (!rr) return showWarn('「残り全部」の賞がないため人数から逆算できません。設定で1つ指定してください。');
+    const others = m.drawnTotal - rr.drawn;
+    const restD = n - others;
+    if (restD < 0) return showWarn(`記録済みの当たりが ${others} 本あるので、人数は ${others} 人以上にしてください。`);
+    if (restD > rr.count) return showWarn(`${rr.name} は全部で ${rr.count} 本なので、人数は最大 ${others + rr.count} 人です。`);
+    if (restD === rr.drawn) return showWarn('');
+    pushUndo();
+    state.drawn[rr.id] = restD;
+    addLog(`引き終わり ${n} 人に更新`);
+    showWarn('');
+    commit();
+  }
+
+  function hit(id, delta) {
+    const m = compute();
+    const r = m.rows.find(x => x.id === id);
+    if (!r) return;
+    const next = r.drawn + delta;
+    if (next < 0 || next > r.count) return;
+    pushUndo();
+    state.drawn[id] = next;
+    addLog(delta > 0 ? `${r.name}（${yen(r.amount)}）が出た` : `${r.name} を1本取り消し`);
+    commit();
+    if (delta > 0) toast(`${r.name} を記録しました`);
+  }
+
+  function undo() {
+    if (!state.undo.length) return;
+    state.drawn = JSON.parse(state.undo.pop());
+    addLog('1つ戻した');
+    commit();
+    toast('1つ戻しました');
+  }
+
+  // ---------- probability helpers ----------
+  // P(at least one of k copies still unrevealed after m random draws from R) = 1 - C(m,k)/C(R,k)
+  function pSurvive(k, m, R) {
+    if (k <= 0) return 0;
+    if (m < k) return 1;
+    let p = 1;
+    for (let j = 0; j < k; j++) p *= (m - j) / (R - j);
+    return 1 - p;
+  }
+
+  function simulate(rows, m, sims) {
+    const amts = rows.map(r => r.amount);
+    const base = rows.map(r => r.rem);
+    const R0 = base.reduce((a, b) => a + b, 0);
+    const out = new Float64Array(sims);
+    for (let s = 0; s < sims; s++) {
+      const rem = base.slice();
+      let R = R0;
+      for (let i = 0; i < m && R > 0; i++) {
+        let x = Math.random() * R, j = 0;
+        while (x >= rem[j]) { x -= rem[j]; j++; }
+        rem[j]--; R--;
+      }
+      let sum = 0;
+      for (let j = 0; j < rem.length; j++) sum += rem[j] * amts[j];
+      out[s] = R > 0 ? sum / R : 0;
+    }
+    out.sort();
+    return out;
+  }
+  const q = (arr, p) => arr[Math.min(arr.length - 1, Math.floor(p * arr.length))];
+
+  // ---------- render ----------
+  let lastEV = null;
+  function render() {
+    const m = compute();
+    const c = state.config;
+
+    $('evName').textContent = c.name || '名前のない抽選会';
+    const evEl = $('evBig');
+    evEl.innerHTML = m.R > 0 ? `<small>¥</small>${Math.round(m.ev).toLocaleString('ja-JP')}` : '終了';
+    if (lastEV !== null && Math.round(lastEV) !== Math.round(m.ev)) {
+      evEl.classList.remove('flash'); void evEl.offsetWidth; evEl.classList.add('flash');
+    }
+    lastEV = m.ev;
+    const net = m.ev - m.cost;
+    $('evSub').innerHTML = m.R > 0
+      ? `参加費 ${yen(m.cost)} を引くと <b>${net >= 0 ? '+' : '−'}${yen(Math.abs(net)).slice(0)}</b>（還元率 ${m.cost > 0 ? pct(m.ev / m.cost, 0) : '—'}）`
+      : 'すべて引き終わりました';
+    const chip = $('evChip');
+    if (m.R === 0) { chip.className = 'chip end'; chip.textContent = '終了'; }
+    else if (net >= 0) { chip.className = 'chip good'; chip.textContent = '参加費より上'; }
+    else { chip.className = 'chip bad'; chip.textContent = '参加費より下'; }
+
+    $('stRemain').textContent = `${m.R.toLocaleString()}本`;
+    $('stProfit').textContent = m.R ? pct(m.pProfit) : '—';
+    $('stTop').textContent = m.R ? pct(m.pTop, 2) : '—';
+
+    renderLive(m);
+    renderTurn(m);
+    renderSpark();
+    if (!$('pLog').hidden) renderLog();
+  }
+
+  function renderLive(m) {
+    const maxAmt = Math.max(...m.rows.map(r => r.amount), 1);
+    $('liveList').innerHTML = m.rows.map(r => {
+      const p = m.R ? r.rem / m.R : 0;
+      const contrib = m.R ? r.rem * r.amount / m.R : 0;
+      const isTop = !r.rest && r.amount >= maxAmt * 0.5 && r.rem > 0;
+      return `<div class="prize ${isTop ? 'top' : ''} ${r.rem === 0 ? 'out' : ''}">
+        <div class="p-main">
+          <div class="p-name">${esc(r.name)} <span class="p-amt num">${yen(r.amount)}</span></div>
+          <div class="p-meta num">
+            <span>残り <b>${r.rem}</b>/${r.count}</span>
+            <span>確率 <b>${pct(p, p < 0.01 ? 2 : 1)}</b></span>
+            <span>寄与 ${yen(contrib)}</span>
+          </div>
+        </div>
+        <div class="p-btns">
+          <button class="btn small" type="button" data-hit="${r.id}" data-d="-1" ${r.drawn === 0 ? 'disabled' : ''} aria-label="${esc(r.name)}を1本取り消す">−</button>
+          <button class="btn hit" type="button" data-hit="${r.id}" data-d="1" ${r.rem === 0 ? 'disabled' : ''}>出た</button>
+        </div>
+        <div class="bar"><i style="width:${r.count ? (r.rem / r.count * 100) : 0}%"></i></div>
+      </div>`;
+    }).join('');
+
+    const di = $('drawnInput');
+    if (document.activeElement !== di) di.value = m.drawnTotal;
+    const ri = $('remainInput');
+    if (document.activeElement !== ri) ri.value = '';
+    const rr = restRow(m);
+    $('restNote').textContent = rr
+      ? `人数を変えると、記録した当たり以外は「${rr.name}」を引いたものとして数えます。`
+      : '「残り全部」の賞がないので人数入力は使えません。';
+    $('undoBtn').disabled = !state.undo.length;
+  }
+
+  let simTimer = null;
+  function renderTurn(m) {
+    const box = $('turnBox');
+    const pos = +state.myPos || 0;
+    if (document.activeElement !== $('myPos')) $('myPos').value = state.myPos || '';
+    if (!pos) { box.innerHTML = '<p class="note">順番を入れると、自分の番まで上位賞が残っている確率と、期待値の動きそうな範囲を出します。</p>'; return; }
+    const ahead = pos - 1 - m.drawnTotal;
+    if (ahead < 0) { box.innerHTML = '<p class="note">すでに自分の順番を過ぎています。</p>'; return; }
+    if (ahead >= m.R) { box.innerHTML = '<p class="warn">残り本数より前の人数が多いため、自分の番までに無くなります。</p>'; return; }
+
+    const surv = m.topRows.filter(r => r.rem > 0).map(r => {
+      const ps = pSurvive(r.rem, ahead, m.R);
+      return `<div><span>${esc(r.name)}</span><span class="track"><i style="width:${ps * 100}%"></i></span><span class="num">${pct(ps, 0)}</span></div>`;
+    }).join('');
+
+    box.innerHTML = `
+      <div class="turn-grid">
+        <div class="mini"><div class="k">前にいる人</div><div class="v num">${ahead.toLocaleString()}人</div></div>
+        <div class="mini"><div class="k">自分の番の期待値（今の見込み）</div><div class="v num">${yen(m.ev)}</div></div>
+        <div class="mini" style="grid-column:1/-1"><div class="k">自分の番での期待値の幅（80%の確率でこの範囲）</div><div class="v num" id="simRange">計算中…</div></div>
+      </div>
+      ${surv ? `<div><div class="note" style="margin-bottom:6px">自分の番に1本以上残っている確率</div><div class="survive">${surv}</div></div>` : '<p class="note">上位賞はすべて出ました。</p>'}
+    `;
+    clearTimeout(simTimer);
+    simTimer = setTimeout(() => {
+      const el = $('simRange'); if (!el) return;
+      if (ahead === 0) { el.textContent = `${yen(m.ev)}（次が自分の番）`; return; }
+      const sims = simulate(m.rows, ahead, 1000);
+      const lo = q(sims, 0.1), mid = q(sims, 0.5), hi = q(sims, 0.9);
+      const below = m.cost > 0 ? sims.filter(v => v < m.cost).length / sims.length : 0;
+      el.innerHTML = `${yen(lo)} 〜 ${yen(hi)}<div class="note">中央値 ${yen(mid)}${m.cost > 0 ? ` ／ 参加費を下回る確率 ${pct(below, 0)}` : ''}</div>`;
+    }, 60);
+  }
+
+  function series() {
+    const pts = [];
+    const first = state.log.length ? null : compute();
+    // starting point = full pool EV
+    const { list } = effective();
+    const T = list.reduce((s, r) => s + r.count, 0);
+    const ev0 = T ? list.reduce((s, r) => s + r.count * r.amount, 0) / T : 0;
+    pts.push({ n: 0, ev: ev0 });
+    state.log.forEach(l => pts.push({ n: l.n, ev: l.ev }));
+    if (first) pts.push({ n: first.drawnTotal, ev: first.ev });
+    return pts;
+  }
+
+  function pathFor(pts, w, h, pad, yMin, yMax) {
+    const xs = pts.map((_, i) => i);
+    const xMax = Math.max(1, xs.length - 1);
+    const sx = i => pad.l + (i / xMax) * (w - pad.l - pad.r);
+    const sy = v => pad.t + (1 - (v - yMin) / Math.max(1e-9, yMax - yMin)) * (h - pad.t - pad.b);
+    return { d: pts.map((p, i) => `${i ? 'L' : 'M'}${sx(i).toFixed(1)},${sy(p.ev).toFixed(1)}`).join(''), sx, sy, xMax };
+  }
+
+  function renderSpark() {
+    const pts = series();
+    const svg = $('spark');
+    const cost = +state.config.cost || 0;
+    const evs = pts.map(p => p.ev);
+    let yMin = Math.min(...evs, cost || Infinity), yMax = Math.max(...evs, cost);
+    if (yMax - yMin < 1) { yMin -= 50; yMax += 50; }
+    const { d, sx, sy, xMax } = pathFor(pts, 120, 46, { l: 2, r: 5, t: 5, b: 5 }, yMin, yMax);
+    const last = pts[pts.length - 1];
+    svg.innerHTML = `
+      ${cost ? `<line x1="2" x2="115" y1="${sy(cost).toFixed(1)}" y2="${sy(cost).toFixed(1)}" stroke="var(--muted)" stroke-dasharray="2 3" stroke-width="1"></line>` : ''}
+      <path d="${d}" fill="none" stroke="var(--brass)" stroke-width="2" stroke-linejoin="round"></path>
+      <circle cx="${sx(xMax).toFixed(1)}" cy="${sy(last.ev).toFixed(1)}" r="3" fill="var(--brass)"></circle>`;
+  }
+
+  function renderLog() {
+    const pts = series();
+    const svg = $('bigChart');
+    const cost = +state.config.cost || 0;
+    const evs = pts.map(p => p.ev);
+    let yMin = Math.min(...evs, cost || Infinity), yMax = Math.max(...evs, cost);
+    if (yMax - yMin < 1) { yMin -= 100; yMax += 100; }
+    const span = yMax - yMin; yMin -= span * 0.08; yMax += span * 0.08;
+    const pad = { l: 52, r: 10, t: 10, b: 22 };
+    const { d, sx, sy, xMax } = pathFor(pts, 320, 140, pad, yMin, yMax);
+    const ticks = [yMin + span * 0.08, (yMin + yMax) / 2, yMax - span * 0.08];
+    const last = pts[pts.length - 1];
+    svg.innerHTML = `
+      ${ticks.map(v => `<line x1="${pad.l}" x2="310" y1="${sy(v).toFixed(1)}" y2="${sy(v).toFixed(1)}" stroke="var(--line)" stroke-width="1"></line>
+        <text x="${pad.l - 6}" y="${(sy(v) + 4).toFixed(1)}" text-anchor="end" font-size="10" fill="var(--muted)">${yen(v)}</text>`).join('')}
+      ${cost ? `<line x1="${pad.l}" x2="310" y1="${sy(cost).toFixed(1)}" y2="${sy(cost).toFixed(1)}" stroke="var(--bad)" stroke-dasharray="3 3" stroke-width="1"></line>
+        <text x="310" y="${(sy(cost) - 4).toFixed(1)}" text-anchor="end" font-size="10" fill="var(--bad)">参加費</text>` : ''}
+      <path d="${d} L${sx(xMax).toFixed(1)},${140 - pad.b} L${pad.l},${140 - pad.b} Z" fill="var(--brass)" opacity=".12"></path>
+      <path d="${d}" fill="none" stroke="var(--brass)" stroke-width="2" stroke-linejoin="round"></path>
+      <circle cx="${sx(xMax).toFixed(1)}" cy="${sy(last.ev).toFixed(1)}" r="3.5" fill="var(--brass)"></circle>
+      <text x="${pad.l}" y="136" font-size="10" fill="var(--muted)">開始</text>
+      <text x="310" y="136" text-anchor="end" font-size="10" fill="var(--muted)">記録 ${pts.length - 1} 件</text>`;
+
+    $('logCount').textContent = `${state.log.length} 件`;
+    $('logList').innerHTML = state.log.length
+      ? state.log.slice().reverse().slice(0, 300).map(l => {
+          const t = new Date(l.t);
+          const hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+          return `<li><time class="num">${hm}</time><span>${esc(l.text)}<br><span class="note num">残り ${l.R} 本</span></span><span class="e num">${yen(l.ev)}</span></li>`;
+        }).join('')
+      : '<li><span></span><span class="note">まだ記録はありません。ライブ画面で「出た」をタップすると、ここに時刻つきで残ります。</span><span></span></li>';
+  }
+
+  // ---------- settings ----------
+  function renderSettings() {
+    const c = state.config;
+    $('cfgName').value = c.name;
+    $('cfgTotal').value = c.total;
+    $('cfgCost').value = c.cost;
+    const { list, fixed, over } = effective();
+    $('editList').innerHTML = c.prizes.map((p, i) => {
+      const eff = list.find(x => x.id === p.id);
+      return `<div class="edit" data-i="${i}">
+        <div class="name">
+          <input type="text" data-f="name" value="${esc(p.name)}" aria-label="賞の名前" placeholder="賞の名前">
+          <button class="btn small danger" type="button" data-del="${i}" aria-label="${esc(p.name)}を削除">削除</button>
+        </div>
+        <label class="f">金額（円）<input type="number" inputmode="numeric" data-f="amount" min="0" value="${p.amount}"></label>
+        ${p.rest
+          ? `<div class="rest-count num">本数: 残り全部 = <b>${eff ? eff.count : 0}</b> 本</div>`
+          : `<label class="f">本数<input type="number" inputmode="numeric" data-f="count" min="0" value="${p.count}"></label>`}
+        <div class="opts">
+          <label><input type="radio" name="restPick" data-rest="${i}" ${p.rest ? 'checked' : ''}> 残り全部（ハズレ・最下位賞）</label>
+          ${state.drawn[p.id] ? `<span class="note">記録 ${state.drawn[p.id]} 本</span>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+    const w = $('cfgWarn');
+    const hasRest = c.prizes.some(p => p.rest);
+    if (over) { w.hidden = false; w.textContent = `賞の本数の合計（${fixed}本）が総本数（${c.total}本）を超えています。`; }
+    else if (!hasRest && (+c.total - fixed) > 0) { w.hidden = false; w.textContent = `残りの ${+c.total - fixed} 本は ¥0 のハズレとして計算します。`; }
+    else w.hidden = true;
+
+    $('presetSel').innerHTML = presets.map((p, i) => `<option value="${i}">${esc(p.name)}</option>`).join('');
+    $('jsonBox').value = JSON.stringify(exportConfig(), null, 1);
+  }
+
+  function exportConfig() {
+    const c = state.config;
+    return { name: c.name, total: +c.total, cost: +c.cost, prizes: c.prizes.map(p => ({ name: p.name, amount: +p.amount, count: p.rest ? 0 : +p.count, rest: !!p.rest })) };
+  }
+
+  function importConfig(obj) {
+    if (!obj || !Array.isArray(obj.prizes) || !(+obj.total > 0)) throw new Error('形式が違います');
+    let restSeen = false;
+    return {
+      name: String(obj.name || '抽選会'),
+      total: Math.floor(+obj.total),
+      cost: Math.max(0, +obj.cost || 0),
+      prizes: obj.prizes.map(p => {
+        const rest = !!p.rest && !restSeen; if (rest) restSeen = true;
+        return { id: uid(), name: String(p.name || '賞'), amount: Math.max(0, +p.amount || 0), count: Math.max(0, Math.floor(+p.count || 0)), rest };
+      }),
+    };
+  }
+
+  function replaceConfig(cfg, label) {
+    state.config = cfg;
+    state.drawn = {}; state.undo = []; state.log = [];
+    commit(); renderSettings();
+    toast(label);
+  }
+
+  function commit() { persist(); render(); }
+
+  // ---------- UI glue ----------
+  let toastTimer;
+  function toast(msg) {
+    const t = $('toast'); t.textContent = msg; t.hidden = false;
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, 1600);
+  }
+  function showWarn(msg) {
+    const w = $('drawnWarn'); w.textContent = msg; w.hidden = !msg;
+  }
+
+  // Two-tap confirm for destructive buttons (confirm() is unavailable in the viewer)
+  function armed(btn, fn, label) {
+    if (btn.classList.contains('armed')) { btn.classList.remove('armed'); btn.textContent = btn.dataset.orig; fn(); return; }
+    btn.dataset.orig = btn.textContent;
+    btn.classList.add('armed'); btn.textContent = label || 'もう一度タップで実行';
+    setTimeout(() => { if (btn.classList.contains('armed')) { btn.classList.remove('armed'); btn.textContent = btn.dataset.orig; } }, 3000);
+  }
+
+  document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', t === tab));
+    document.querySelectorAll('.panel').forEach(p => { p.hidden = p.id !== tab.dataset.tab; p.style.display = p.hidden ? '' : 'grid'; });
+    if (tab.dataset.tab === 'pSet') renderSettings();
+    if (tab.dataset.tab === 'pLog') renderLog();
+    window.scrollTo({ top: 0 });
+  }));
+
+  $('liveList').addEventListener('click', e => {
+    const b = e.target.closest('[data-hit]'); if (!b) return;
+    hit(b.dataset.hit, +b.dataset.d);
+  });
+  $('undoBtn').addEventListener('click', undo);
+
+  document.querySelectorAll('[data-step]').forEach(b => b.addEventListener('click', () => {
+    setDrawnTotal(compute().drawnTotal + +b.dataset.step);
+  }));
+  $('drawnInput').addEventListener('change', e => {
+    const v = Math.floor(+e.target.value);
+    if (Number.isFinite(v) && v >= 0) setDrawnTotal(v); else render();
+  });
+  $('remainInput').addEventListener('change', e => {
+    if (e.target.value === '') return;
+    const v = Math.floor(+e.target.value);
+    const T = effective().list.reduce((s, r) => s + r.count, 0);
+    if (Number.isFinite(v) && v >= 0 && v <= T) setDrawnTotal(T - v);
+    else showWarn(`残り本数は 0〜${T} の範囲で入れてください。`);
+    e.target.value = '';
+    e.target.blur();
+  });
+  $('myPos').addEventListener('input', e => {
+    const v = Math.floor(+e.target.value);
+    state.myPos = v > 0 ? v : null;
+    persist(); renderTurn(compute());
+  });
+
+  // settings handlers
+  $('cfgName').addEventListener('input', e => { state.config.name = e.target.value; commit(); });
+  $('cfgTotal').addEventListener('input', e => { state.config.total = Math.max(0, Math.floor(+e.target.value || 0)); commit(); refreshRestCounts(); });
+  $('cfgCost').addEventListener('input', e => { state.config.cost = Math.max(0, +e.target.value || 0); commit(); });
+  $('editList').addEventListener('input', e => {
+    const box = e.target.closest('.edit'); if (!box || !e.target.dataset.f) return;
+    const p = state.config.prizes[+box.dataset.i];
+    const f = e.target.dataset.f;
+    p[f] = f === 'name' ? e.target.value : Math.max(0, +e.target.value || 0);
+    if (f === 'count') p.count = Math.floor(p.count);
+    commit(); refreshRestCounts();
+  });
+  $('editList').addEventListener('change', e => {
+    if (e.target.dataset.rest === undefined) return;
+    const i = +e.target.dataset.rest;
+    state.config.prizes.forEach((p, j) => p.rest = j === i);
+    commit(); renderSettings();
+  });
+  $('editList').addEventListener('click', e => {
+    const b = e.target.closest('[data-del]'); if (!b) return;
+    armed(b, () => {
+      const p = state.config.prizes.splice(+b.dataset.del, 1)[0];
+      delete state.drawn[p.id];
+      commit(); renderSettings(); toast(`${p.name} を削除しました`);
+    }, '本当に削除');
+  });
+  $('addPrize').addEventListener('click', () => {
+    state.config.prizes.push({ id: uid(), name: `${state.config.prizes.length + 1}等`, amount: 1000, count: 1, rest: false });
+    commit(); renderSettings();
+  });
+  // keep rest-count text in sync without re-rendering inputs (keeps focus)
+  function refreshRestCounts() {
+    const { list, fixed, over } = effective();
+    state.config.prizes.forEach((p, i) => {
+      if (!p.rest) return;
+      const el = document.querySelector(`.edit[data-i="${i}"] .rest-count b`);
+      const eff = list.find(x => x.id === p.id);
+      if (el) el.textContent = eff ? eff.count : 0;
+    });
+    const w = $('cfgWarn');
+    const c = state.config;
+    if (over) { w.hidden = false; w.textContent = `賞の本数の合計（${fixed}本）が総本数（${c.total}本）を超えています。`; }
+    else if (!c.prizes.some(p => p.rest) && (+c.total - fixed) > 0) { w.hidden = false; w.textContent = `残りの ${+c.total - fixed} 本は ¥0 のハズレとして計算します。`; }
+    else w.hidden = true;
+    $('jsonBox').value = JSON.stringify(exportConfig(), null, 1);
+  }
+
+  $('presetLoad').addEventListener('click', e => {
+    const p = presets[+$('presetSel').value]; if (!p) return;
+    armed(e.currentTarget, () => replaceConfig(importConfig(p.config), `「${p.name}」を読み込みました`), '記録を消して読み込む');
+  });
+  $('presetSave').addEventListener('click', () => {
+    const name = state.config.name || '抽選会';
+    const i = presets.findIndex(p => p.name === name);
+    const entry = { name, config: exportConfig() };
+    if (i >= 0) presets[i] = entry; else presets.push(entry);
+    save(PRESET_KEY, presets); renderSettings();
+    $('presetSel').value = String(i >= 0 ? i : presets.length - 1);
+    toast(`「${name}」として保存しました`);
+  });
+  $('presetDel').addEventListener('click', e => {
+    const i = +$('presetSel').value; if (!presets[i]) return;
+    armed(e.currentTarget, () => {
+      const [p] = presets.splice(i, 1); save(PRESET_KEY, presets); renderSettings(); toast(`「${p.name}」を削除しました`);
+    }, '本当に削除');
+  });
+  $('jsonCopy').addEventListener('click', () => {
+    const box = $('jsonBox'); box.value = JSON.stringify(exportConfig(), null, 1);
+    navigator.clipboard?.writeText(box.value).then(() => toast('コピーしました'), () => { box.select(); toast('選択したのでコピーしてください'); })
+      ?? (box.select(), toast('選択したのでコピーしてください'));
+  });
+  $('jsonLoad').addEventListener('click', e => {
+    let cfg;
+    try { cfg = importConfig(JSON.parse($('jsonBox').value)); }
+    catch { toast('読み込めませんでした。JSONの形を確認してください'); return; }
+    armed(e.currentTarget, () => replaceConfig(cfg, '設定を取り込みました'), '記録を消して取り込む');
+  });
+  $('resetBtn').addEventListener('click', e => {
+    armed(e.currentTarget, () => { state.drawn = {}; state.undo = []; state.log = []; commit(); renderSettings(); toast('当選の記録をリセットしました'); }, 'もう一度タップでリセット');
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
