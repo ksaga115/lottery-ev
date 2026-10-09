@@ -177,6 +177,13 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
 .bias-w { font-family: var(--f-display); font-size: 28px; line-height: 1; }
 .post { width: 100%; height: auto; display: block; }
 
+.bias-p .chip { font-size: 11px; padding: 1px 8px; }
+.bias-row { display: grid; grid-template-columns: 1fr 96px; gap: 10px; align-items: center; }
+.bias-row dl { min-width: 0; }
+.mini-post { width: 96px; height: 26px; display: block; }
+.sub-h { font-size: 13px; font-weight: 700; }
+@media (max-width: 380px) { .bias-row { grid-template-columns: 1fr; } }
+
 /* settings editor */
 .edit-list { display: grid; gap: 10px; }
 .edit {
@@ -787,40 +794,8 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
     return p.map(v => v / z);
   }
 
-  // Expected top tickets left after m more draws under weight w (Wallenius mean equation).
-  function topLeftAfter(K, B, m, w) {
-    if (m <= 0 || K === 0) return K;
-    if (B === 0) return Math.max(0, K - m);
-    let lo = Math.max(0, m - B), hi = Math.min(K, m);
-    for (let i = 0; i < 50; i++) {
-      const mu = (lo + hi) / 2;
-      const f = (1 - mu / K) - Math.pow(Math.max(0, 1 - (m - mu) / B), w);
-      if (f > 0) lo = mu; else hi = mu;
-    }
-    return K - (lo + hi) / 2;
-  }
-
-  function biasModel(m) {
-    const rest = restRow(m);
-    if (!rest) return { ok: false, why: '「残り全部」の賞がないので推定できません。' };
-    const known = state.actions.some(a => a.k === 'total' || (a.k === 'hit' && a.id === rest.id));
-    if (!known) return { ok: false, why: '引き終わった人数（または残り本数）を入れると、上位賞の出方が公平かどうかを推定します。' };
-    const tops = m.rows.filter(r => !r.rest);
-    const K0 = tops.reduce((s, r) => s + r.count, 0), B0 = rest.count;
-    const n = m.drawnTotal, x = tops.reduce((s, r) => s + r.drawn, 0);
-    if (!K0 || !B0) return { ok: false, why: '上位賞と「残り全部」の賞の両方が必要です。' };
-    const post = biasPosterior(K0, B0, n, x);
-    const Kr = K0 - x, Br = B0 - rest.drawn;
-    const topAvg = Kr ? tops.reduce((s, r) => s + r.rem * r.amount, 0) / Kr : 0;
-    const evAt = ahead => post.reduce((s, p, i) => {
-      const w = W_GRID[i];
-      const kl = topLeftAfter(Kr, Br, ahead, w);
-      const bl = Math.max(0, Br - (ahead - (Kr - kl)));
-      const pt = (w * kl + bl) > 0 ? w * kl / (w * kl + bl) : 0;
-      return s + p * (pt * topAvg + (1 - pt) * rest.amount);
-    }, 0);
-    let c = 0, q05 = W_GRID[0], q95 = W_GRID[W_GRID.length - 1], q50 = 1;
-    let f05 = false, f50 = false, f95 = false;
+  function summarize(post) {
+    let c = 0, q05 = W_GRID[W_GRID.length - 1], q50 = q05, q95 = q05, f05 = false, f50 = false, f95 = false;
     post.forEach((p, i) => {
       c += p;
       if (!f05 && c >= 0.05) { q05 = W_GRID[i]; f05 = true; }
@@ -828,51 +803,152 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
       if (!f95 && c >= 0.95) { q95 = W_GRID[i]; f95 = true; }
     });
     const pBelow = post.reduce((s, p, i) => s + (W_GRID[i] < 1 ? p : 0), 0) + (post[40] || 0) / 2;
-    return { ok: true, post, n, x, expX: n * K0 / (K0 + B0), q05, q50, q95, pBelow, evAt };
+    return { q05, q50, q95, pBelow };
+  }
+
+  function verdictOf(sm, long) {
+    if (sm.q95 < 1) return ['bad', long ? '出にくい状態が続いている' : '出にくい'];
+    if (sm.q05 > 1) return ['good', long ? '出やすい（早めに出ている）' : '出やすい'];
+    if (sm.pBelow > 0.75) return ['bad', 'やや出にくい'];
+    if (sm.pBelow < 0.25) return ['good', 'やや出やすい'];
+    return ['end', 'ほぼ公平'];
+  }
+
+  // Deterministic stratified draws from a grid posterior (so numbers don't flicker between renders).
+  function gridSamples(post, S, shift) {
+    const cdf = []; let c = 0; post.forEach(p => cdf.push(c += p));
+    const out = new Float64Array(S);
+    for (let s = 0; s < S; s++) {
+      const u = (((s + 0.5) / S) + shift) % 1;
+      let i = 0; while (i < cdf.length - 1 && cdf[i] < u) i++;
+      out[s] = W_GRID[i];
+    }
+    return out;
+  }
+
+  // Multivariate Wallenius mean: class j keeps K_j·(1−θ)^{w_j}, rest (w=1) keeps B·(1−θ), with θ set so that m tickets leave.
+  // Returns the probability of each class on the draw right after those m.
+  function drawProbs(Ks, ws, B, m) {
+    let th = 0;
+    const total = Ks.reduce((s, k) => s + k, 0) + B;
+    if (m > 0 && m < total) {
+      let lo = 0, hi = 1;
+      for (let it = 0; it < 50; it++) {
+        const t = (lo + hi) / 2;
+        let g = B * t;
+        for (let j = 0; j < Ks.length; j++) g += Ks[j] * (1 - Math.pow(1 - t, ws[j]));
+        if (g < m) lo = t; else hi = t;
+      }
+      th = (lo + hi) / 2;
+    }
+    const left = Ks.map((k, j) => ws[j] * k * Math.pow(1 - th, ws[j]));
+    const bl = B * (1 - th);
+    const z = left.reduce((s, v) => s + v, 0) + bl;
+    return { tops: left.map(v => z > 0 ? v / z : 0), rest: z > 0 ? bl / z : 0 };
+  }
+
+  function biasModel(m) {
+    const rest = restRow(m);
+    if (!rest) return { ok: false, why: '「残り全部」の賞がないので推定できません。' };
+    const known = state.actions.some(a => a.k === 'total' || (a.k === 'hit' && a.id === rest.id));
+    if (!known) return { ok: false, why: '引き終わった人数（または残り本数）を入れると、賞ごとに出方が公平かどうかを推定します。' };
+    const tops = m.rows.filter(r => !r.rest && r.count > 0);
+    const K0 = tops.reduce((s, r) => s + r.count, 0), B0 = rest.count, N0 = K0 + B0;
+    const n = m.drawnTotal, x = tops.reduce((s, r) => s + r.drawn, 0);
+    if (!K0 || !B0) return { ok: false, why: '上位賞と「残り全部」の賞の両方が必要です。' };
+
+    // pooled: all top prizes vs rest
+    const post = biasPosterior(K0, B0, n, x);
+    // per prize: conditional on draws from {prize i, rest}, the split is univariate Fisher NCH with odds w_i
+    const per = tops.map(r => {
+      const pp = biasPosterior(r.count, B0, r.drawn + rest.drawn, r.drawn);
+      return { r, post: pp, sm: summarize(pp), expX: n * r.count / N0 };
+    });
+
+    const S = 300;
+    const samples = per.map((p, j) => gridSamples(p.post, S, (j * 0.6180339887) % 1));
+    const Ks = tops.map(r => r.rem), Br = rest.rem;
+    const at = ahead => {
+      const pr = new Float64Array(tops.length); let pRest = 0;
+      const ws = new Array(tops.length);
+      for (let s = 0; s < S; s++) {
+        for (let j = 0; j < tops.length; j++) ws[j] = samples[j][s];
+        const d = drawProbs(Ks, ws, Br, ahead);
+        d.tops.forEach((v, j) => pr[j] += v / S); pRest += d.rest / S;
+      }
+      const ev = tops.reduce((s, r, j) => s + pr[j] * r.amount, 0) + pRest * rest.amount;
+      return { ev, pr };
+    };
+    return { ok: true, post, sm: summarize(post), per, n, x, expX: n * K0 / N0, at };
+  }
+
+  function postPath(post, W, H, pt, pb, pl = 0, pr = 0) {
+    const mx = Math.max(...post);
+    const sx = i => pl + i / (W_GRID.length - 1) * (W - pl - pr);
+    const sy = p => pt + (1 - p / mx) * (H - pt - pb);
+    return { d: post.map((p, i) => `${i ? 'L' : 'M'}${sx(i).toFixed(1)},${sy(p).toFixed(1)}`).join(''), sx };
   }
 
   function renderBias(m) {
     const box = $('biasBox');
     const b = biasModel(m);
     if (!b.ok) { box.innerHTML = `<p class="note">${b.why}</p>`; return; }
-    const verdict = b.q95 < 1 ? ['bad', '上位賞が出にくい（後に残されている可能性）']
-      : b.q05 > 1 ? ['good', '上位賞が出やすい（早めに出ている）']
-      : b.pBelow > 0.75 ? ['bad', 'やや出にくい傾向'] : b.pBelow < 0.25 ? ['good', 'やや出やすい傾向'] : ['end', 'ほぼ公平'];
+    const verdict = verdictOf(b.sm, true);
     const pos = +state.myPos || 0;
     const ahead = pos ? pos - 1 - m.drawnTotal : -1;
-    const evNext = b.evAt(0);
-    const evTurn = ahead > 0 && ahead < m.R ? b.evAt(ahead) : null;
+    const hasTurn = ahead > 0 && ahead < m.R;
+    const next = b.at(0);
+    const turn = hasTurn ? b.at(ahead) : null;
 
-    // posterior curve
-    const W = 300, H = 70, pl = 4, pr = 4, pt = 6, pb = 16;
-    const mx = Math.max(...b.post);
-    const sx = i => pl + i / (W_GRID.length - 1) * (W - pl - pr);
-    const sy = p => pt + (1 - p / mx) * (H - pt - pb);
-    const d = b.post.map((p, i) => `${i ? 'L' : 'M'}${sx(i).toFixed(1)},${sy(p).toFixed(1)}`).join('');
-    const x1 = sx(40);
+    // pooled posterior curve
+    const W = 300, H = 70, pt = 6, pb = 16;
+    const { d, sx } = postPath(b.post, W, H, pt, pb, 4, 4);
     const ticks = [[0.25, '1/4'], [0.5, '1/2'], [1, '1'], [2, '2'], [4, '4']].map(([w, t]) => {
       const i = (Math.log(w) + 2) / 0.05;
       return `<text x="${sx(i).toFixed(1)}" y="${H - 3}" text-anchor="middle" font-size="10" fill="var(--muted)">${t}</text>`;
     }).join('');
 
+    const perHtml = b.per.map((p, j) => {
+      const r = p.r, v = verdictOf(p.sm, false);
+      const sp = postPath(p.post, 96, 26, 2, 2);
+      const fairNow = m.R ? r.rem / m.R : 0;
+      const pTurn = turn ? turn.pr[j] : next.pr[j];
+      return `<div class="dist-p bias-p">
+        <div class="hd2">${esc(r.name)} ${yen(r.amount)}<span class="chip ${v[0]}">${v[1]}</span></div>
+        <div class="bias-row">
+          <dl>
+            <dt>出た本数</dt><dd class="num">${r.drawn}/${r.count} 本（公平なら ${p.expX.toFixed(1)}）</dd>
+            <dt>偏り係数 w</dt><dd class="num">${p.sm.q50.toFixed(2)}（${p.sm.q05.toFixed(2)}〜${p.sm.q95.toFixed(2)}）</dd>
+            <dt>${turn ? '自分の番で当たる確率' : '次の1本で当たる確率'}</dt><dd class="num">${r.rem ? `${pct(pTurn, pTurn < 0.01 ? 3 : 2)}<span class="note">（公平なら ${pct(fairNow, fairNow < 0.01 ? 3 : 2)}）</span>` : 'もう残っていない'}</dd>
+          </dl>
+          <svg viewBox="0 0 96 26" class="mini-post" aria-label="${esc(r.name)}の偏り係数の分布">
+            <line x1="${sp.sx(40).toFixed(1)}" x2="${sp.sx(40).toFixed(1)}" y1="2" y2="24" stroke="var(--muted)" stroke-dasharray="2 2"></line>
+            <path d="${sp.d}" fill="none" stroke="var(--brass)" stroke-width="1.5"></path>
+          </svg>
+        </div>
+      </div>`;
+    }).join('');
+
     box.innerHTML = `
       <div class="bias-head">
-        <div><div class="ev-label">偏り係数 w（1 = 公平）</div><div class="bias-w num">${b.q50.toFixed(2)}</div></div>
+        <div><div class="ev-label">上位賞全体の偏り係数 w（1 = 公平）</div><div class="bias-w num">${b.sm.q50.toFixed(2)}</div></div>
         <span class="chip ${verdict[0]}">${verdict[1]}</span>
       </div>
       <svg class="post" viewBox="0 0 ${W} ${H}" aria-label="偏り係数の事後分布">
-        <line x1="${x1}" x2="${x1}" y1="${pt}" y2="${H - pb}" stroke="var(--muted)" stroke-dasharray="2 3"></line>
-        <path d="${d} L${sx(W_GRID.length - 1)},${H - pb} L${pl},${H - pb} Z" fill="var(--brass)" opacity=".15"></path>
+        <line x1="${sx(40)}" x2="${sx(40)}" y1="${pt}" y2="${H - pb}" stroke="var(--muted)" stroke-dasharray="2 3"></line>
+        <path d="${d} L${sx(W_GRID.length - 1)},${H - pb} L4,${H - pb} Z" fill="var(--brass)" opacity=".15"></path>
         <path d="${d}" fill="none" stroke="var(--brass)" stroke-width="2"></path>
         ${ticks}
       </svg>
       <div class="turn-grid">
         <div class="mini"><div class="k">${b.n.toLocaleString()}人中の上位賞</div><div class="v num">${b.x} 本 <span class="note">公平なら ${b.expX.toFixed(1)}</span></div></div>
-        <div class="mini"><div class="k">w の90%の範囲</div><div class="v num">${b.q05.toFixed(2)}〜${b.q95.toFixed(2)}</div></div>
-        <div class="mini"><div class="k">偏り込みの次の1本</div><div class="v num">${yen(evNext)}</div></div>
-        <div class="mini"><div class="k">偏り込みの自分の番</div><div class="v num">${evTurn === null ? '—' : yen(evTurn)}</div></div>
+        <div class="mini"><div class="k">w の90%の範囲</div><div class="v num">${b.sm.q05.toFixed(2)}〜${b.sm.q95.toFixed(2)}</div></div>
+        <div class="mini"><div class="k">偏り込みの次の1本</div><div class="v num">${yen(next.ev)}</div></div>
+        <div class="mini"><div class="k">偏り込みの自分の番</div><div class="v num">${turn ? yen(turn.ev) : '—'}</div></div>
       </div>
-      <p class="note">上位賞が残っている本数の割合どおりに出ているかを見ています。w が1より小さいと、上位賞が後に残される（後半ほど当たりやすい）ことを意味します。最初は「ほぼ公平」と仮定して、データが増えるほど実際の出方に寄せます。</p>`;
+      <div class="sub-h">賞ごとの偏り</div>
+      ${perHtml}
+      <p class="note">w が1より小さい賞は、残り本数の割合から見るより引かれにくい状態が続いていること（箱の混ざり方や入れ方の偏り）を意味し、偏り込みの計算ではその賞を当たりにくく見積もります。各賞は「その賞と${esc(restRow(m).name)}のどちらが引かれたか」だけを比べて推定し、最初は「ほぼ公平」と仮定しています。本数が少ない賞（特賞など）はデータが少ないので範囲が広く出ます。偏り込みの期待値は、賞ごとの偏りをすべて組み合わせて計算しています。</p>`;
   }
 
   function series() {
