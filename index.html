@@ -1107,6 +1107,18 @@ label.f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-wid
     setTimeout(() => { if (btn.classList.contains('armed')) { btn.classList.remove('armed'); btn.textContent = btn.dataset.orig; } }, 3000);
   }
 
+  // iOS Safari still zooms on rapid taps despite touch-action; swallow the 2nd touchend and fire the click ourselves
+  let lastTouchEnd = 0;
+  document.addEventListener('touchend', e => {
+    const now = Date.now();
+    if (now - lastTouchEnd < 350 && !e.target.closest('input, select, textarea')) {
+      e.preventDefault();
+      const t = e.target.closest('button, a, label, [role="button"], .tab');
+      if (t) t.click();
+    }
+    lastTouchEnd = now;
+  }, { passive: false });
+
   document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', t === tab));
     document.querySelectorAll('.panel').forEach(p => { p.hidden = p.id !== tab.dataset.tab; p.style.display = p.hidden ? '' : 'grid'; });
